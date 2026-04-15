@@ -19,6 +19,7 @@ pub enum VeilError {
     NotPolicyOwner          = 0x560B,
     InvalidOwner            = 0x560C,
     AlreadyInitialized      = 0x560D,
+    InvalidMerkleProof      = 0x560E,
 }
 
 impl From<VeilError> for ProgramError {

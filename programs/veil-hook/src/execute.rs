@@ -112,20 +112,11 @@ pub fn execute(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
         return Err(VeilError::AmountExceedsTxCap.into());
     }
 
-    // ── Whitelist / blacklist ────────────────────────────────────────────
+    // ── Extract whitelist + remaining policy fields, then drop borrow ──
     let mode = pol[policy::MODE];
-    if mode == 0 {
-        let root = &pol[policy::WHITELIST_ROOT..policy::WHITELIST_ROOT + 32];
-        if root.iter().any(|&b| b != 0) {
-            // Whitelist root set but ZK proof verification not yet implemented.
-            // Reject to maintain security invariant.
-            return Err(VeilError::RecipientNotWhitelisted.into());
-        }
-    }
-    // mode 1 (blacklist): allow all — no on-chain blacklist entries stored yet
-    // mode 2 (open): allow all
+    let mut wl_root = [0u8; 32];
+    wl_root.copy_from_slice(&pol[policy::WHITELIST_ROOT..policy::WHITELIST_ROOT + 32]);
 
-    // Extract remaining policy fields before dropping the borrow.
     let global_daily_cap = read_u64(&pol, policy::DAILY_CAP);
     let daily_cap = if is_delegate && delegate_daily_cap > 0 {
         if global_daily_cap > 0 { global_daily_cap.min(delegate_daily_cap) } else { delegate_daily_cap }
@@ -138,6 +129,41 @@ pub fn execute(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     let time_start = pol[policy::TIME_START_H];
     let time_end = pol[policy::TIME_END_H];
     drop(pol);
+
+    // ── Whitelist check (needs accounts[7] borrow, so must be after pol drop)
+    if mode == 0 && wl_root.iter().any(|&b| b != 0) {
+        if accounts.len() < 8 {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        }
+        let dest_addr = *accounts[2].address();
+
+        // Derive expected approval PDA: ["approval", mint, token_owner, destination]
+        let (expected_approval, _) = Address::find_program_address(
+            &[APPROVAL_SEED, mint_addr.as_ref(), &token_owner, dest_addr.as_ref()],
+            &crate::ID,
+        );
+        if accounts[7].address() != &expected_approval {
+            return Err(VeilError::RecipientNotWhitelisted.into());
+        }
+        if !accounts[7].owned_by(&crate::ID) {
+            return Err(VeilError::RecipientNotWhitelisted.into());
+        }
+
+        let appr = accounts[7].try_borrow()?;
+        if appr.len() < APPROVAL_SIZE {
+            return Err(VeilError::RecipientNotWhitelisted.into());
+        }
+        if &appr[approval::DISC..approval::DISC + 8] != APPROVAL_DISC {
+            return Err(VeilError::RecipientNotWhitelisted.into());
+        }
+        // Reject if approval root doesn't match current policy root (handles rotation)
+        if &appr[approval::ROOT..approval::ROOT + 32] != &wl_root {
+            return Err(VeilError::RecipientNotWhitelisted.into());
+        }
+        drop(appr);
+    }
+    // mode 1 (blacklist): allow all — no on-chain blacklist entries stored yet
+    // mode 2 (open): allow all
 
     // ── Validate tracker PDA (also keyed to token owner) ────────────────
     if !accounts[6].owned_by(&crate::ID) {

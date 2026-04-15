@@ -48,8 +48,8 @@ extern crate alloc;
 use pinocchio::{AccountView, Address, ProgramResult};
 use pinocchio::error::ProgramError;
 
-// Program ID — replace with actual deployed keypair.
-solana_address::declare_id!("7ZY7yGRoP8v8DniL8YHVR5PcCZq33RCg1zM6nwj9ijRy");
+// Program ID — matches target/deploy/veil_hook-keypair.json
+solana_address::declare_id!("J39uNr5qGDwFXzZ9w2YtPeVenQRQztLc68QXmFL4Diz1");
 
 pinocchio::nostd_panic_handler!();
 
@@ -58,6 +58,7 @@ pub mod state;
 pub mod execute;
 pub mod init_extra;
 pub mod create_policy;
+pub mod whitelist;
 
 // ── Discriminators ───────────────────────────────────────────────────────────
 
@@ -71,6 +72,9 @@ const INIT_EXTRA_METAS_DISC: [u8; 8] = [43, 34, 13, 49, 167, 88, 235, 235];
 const CREATE_POLICY: u8 = 0x00;
 const UPDATE_POLICY: u8 = 0x01;
 const ADD_DELEGATION: u8 = 0x02;
+const SET_WHITELIST_ROOT: u8 = 0x03;
+const APPROVE_DESTINATION: u8 = 0x04;
+const REVOKE_APPROVAL: u8 = 0x05;
 
 // ── Entrypoint ───────────────────────────────────────────────────────────────
 
@@ -107,6 +111,9 @@ fn process_instruction(
         CREATE_POLICY => create_policy::create_policy(accounts, data),
         UPDATE_POLICY => create_policy::update_policy(accounts, data),
         ADD_DELEGATION => create_policy::add_delegation(accounts, data),
+        SET_WHITELIST_ROOT => whitelist::set_whitelist_root(accounts, data),
+        APPROVE_DESTINATION => whitelist::approve_destination(accounts, data),
+        REVOKE_APPROVAL => whitelist::revoke_approval(accounts, data),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }

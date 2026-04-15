@@ -58,8 +58,8 @@ use crate::state::*;
 //   type 3 = account_key:      [3, account_index]
 //   type 4 = account_data:     [4, account_index, data_offset, data_len]
 
-/// Header (8 disc + 4 len + 4 count) + 2 entries × 35 bytes = 86.
-pub const EXTRA_METAS_DATA_SIZE: usize = 86;
+/// Header (8 disc + 4 len + 4 count) + 3 entries × 35 bytes = 121.
+pub const EXTRA_METAS_DATA_SIZE: usize = 121;
 
 pub fn init_extra_account_metas(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
     if accounts.len() < 4 {
@@ -110,9 +110,9 @@ pub fn init_extra_account_metas(accounts: &mut [AccountView], _data: &[u8]) -> P
 
     // TLV header
     buf[0..8].copy_from_slice(&crate::EXECUTE_DISC);                // 8-byte discriminator
-    let value_len: u32 = 4 + 2 * 35;                               // count(4) + entries(70)
+    let value_len: u32 = 4 + 3 * 35;                               // count(4) + entries(105)
     buf[8..12].copy_from_slice(&value_len.to_le_bytes());           // length
-    buf[12..16].copy_from_slice(&2u32.to_le_bytes());               // count = 2
+    buf[12..16].copy_from_slice(&3u32.to_le_bytes());               // count = 3
 
     // Entry 0: Policy PDA (read-only)
     // seeds = [b"policy", mint_key(idx 1), source_token_account.owner(idx 0, offset 32, len 32)]
@@ -137,6 +137,21 @@ pub fn init_extra_account_metas(accounts: &mut [AccountView], _data: &[u8]) -> P
             SeedDef::Literal(TRACKER_SEED),
             SeedDef::AccountKey(1),
             SeedDef::AccountData(0, 32, 32),
+        ],
+    );
+
+    // Entry 2: Approval PDA (read-only)
+    // seeds = [b"approval", mint_key(idx 1), source_token_account.owner(idx 0, offset 32, len 32),
+    //          destination_key(idx 2)]
+    write_extra_meta(
+        &mut buf[86..86 + 35],
+        false,
+        false,
+        &[
+            SeedDef::Literal(APPROVAL_SEED),
+            SeedDef::AccountKey(1),
+            SeedDef::AccountData(0, 32, 32),
+            SeedDef::AccountKey(2),
         ],
     );
 

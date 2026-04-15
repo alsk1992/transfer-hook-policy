@@ -2,3 +2,5 @@
 Cargo.lock
 *.so
 .DS_Store
+demo/target/
+demo/Cargo.lock

@@ -1,0 +1,22 @@
+[package]
+name = "veil-demo"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "devnet-demo"
+path = "src/main.rs"
+
+[[bin]]
+name = "devnet-round2"
+path = "src/round2.rs"
+
+[dependencies]
+solana-client = "2.2"
+solana-sdk = "2.2"
+solana-pubkey = "2.2"
+spl-token-2022 = "7"
+spl-token-client = "0.14"
+spl-associated-token-account = "6"
+spl-transfer-hook-interface = "0.9"
+sha2 = "0.10"

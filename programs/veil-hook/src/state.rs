@@ -28,7 +28,7 @@ pub const EXTRA_METAS_SEED: &[u8] = b"extra-account-metas";
 //  101       1    time_end_h      u8   latest allowed hour UTC   (0 = any)
 //  102       1    mode            u8   0=whitelist  1=blacklist  2=open
 //  103       1    _pad
-//  104      32    whitelist_root  Poseidon Merkle root of allowed recipients
+//  104      32    whitelist_root  SHA256 Merkle root of allowed recipients
 //  136       1    delegations_len number of active delegation slots (max 2)
 //  137       1    _pad2
 //  138      96    delegations     2 × DelegationSlot (48 bytes each)
@@ -116,6 +116,33 @@ pub mod tracker {
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
 pub const SECONDS_PER_MONTH: i64 = 86_400 * 30;
+
+// ── Approval PDA ───────────────────────────────────────────────────────────
+//
+// Persistent whitelist approval for a specific destination.
+//
+// ```text
+//   Offset  Size  Field
+//   ──────  ────  ──────────────────────────────────
+//    0       8    discriminator   b"veilwl\0\0"
+//    8      32    root            Merkle root at time of approval
+//   40      32    destination     approved destination address
+//   72       1    _reserved
+//   ──────  ────
+//   73            total
+// ```
+
+pub const APPROVAL_SEED: &[u8] = b"approval";
+pub const APPROVAL_SIZE: usize = 73;
+pub const APPROVAL_DISC: &[u8; 8] = b"veilwl\0\0";
+pub const MAX_PROOF_DEPTH: usize = 20;
+
+pub mod approval {
+    pub const DISC: usize = 0;
+    pub const ROOT: usize = 8;
+    pub const DESTINATION: usize = 40;
+    pub const _RESERVED: usize = 72;
+}
 
 // ── Byte Helpers ─────────────────────────────────────────────────────────────
 
