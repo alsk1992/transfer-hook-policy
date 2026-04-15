@@ -1,10 +1,12 @@
-# Veil — Programmable Spending Policies for Token-2022
+# transfer-hook-policy
 
-**Rules follow the money — not the wallet.**
+**Programmable spending policies for Solana Token-2022.**
 
-Veil is an open-source [Transfer Hook](https://spl.solana.com/token-2022/extensions#transfer-hook) for Solana's Token-2022 that enforces spending policies at the *token* level. Attach caps, velocity limits, time windows, and delegation controls to any SPL token — enforced on every transfer, with no way to bypass.
+An open-source [Transfer Hook](https://spl.solana.com/token-2022/extensions#transfer-hook) that enforces spending rules at the *token* level. Attach per-tx caps, daily/monthly limits, velocity controls, time-of-day windows, and scoped delegation to any Token-2022 mint — enforced on every transfer, impossible to bypass.
 
 Built from scratch in [Pinocchio](https://github.com/anza-xyz/pinocchio). Zero Anchor. Zero alloc in the hot path. Zero-copy state. **~3,500 CU per transfer.**
+
+---
 
 ## What It Enforces
 
@@ -15,134 +17,151 @@ Built from scratch in [Pinocchio](https://github.com/anza-xyz/pinocchio). Zero A
 | **Monthly cap** | Rolling 30-day cumulative spend limit with auto-reset |
 | **Velocity limit** | Max N transfers per configurable time window |
 | **Time-of-day window** | Restrict transfers to specific UTC hours (e.g. business hours only) |
-| **Recipient whitelist** | Merkle-root-based recipient allow-list (ZK verification planned) |
-| **Delegated spending** | Grant sub-limited authority to other wallets or agents — with their own caps |
+| **Recipient whitelist** | Merkle-root-based recipient allow-list (ZK proof verification planned) |
+| **Delegated spending** | Grant sub-limited authority to other wallets or AI agents — with their own caps |
 
-## Why This Exists
+## Why
 
-Smart contract wallets are great, but they protect the *wallet* — not the *money*. The moment tokens leave a guarded wallet, all restrictions vanish.
+Smart contract wallets protect the *wallet* — not the *money*. The moment tokens leave, all restrictions vanish.
 
-Veil flips this: policies are attached to the **token mint** via Token-2022's transfer hook. Every transfer is intercepted and checked against the owner's policy before it can proceed. You can delegate spending authority to an AI agent, a payments bot, or an employee wallet — and the tokens themselves enforce the limits.
+This hook flips that: policies are attached to the **token mint** via Token-2022's transfer hook extension. Every transfer is intercepted and checked against the owner's policy before it proceeds. Delegate spending to an AI agent, a bot, or an employee — the tokens enforce the limits.
 
 **Use cases:**
 - **Corporate treasury** — enforce spending policies on stablecoin disbursements
 - **AI agent wallets** — give agents spending authority with hard caps they can't exceed
-- **Parental controls** — limit how much/when/where a child's token account can send
+- **Parental controls** — limit how much / when / where a child's token account can send
 - **Payroll rails** — time-locked, rate-limited token distributions
-- **DAO operations** — delegate scoped spending to multisig signers
+- **DAO operations** — delegate scoped spending to committee members
 
 ## Architecture
 
 ```
- Token-2022 transfer
-       │
-       ▼
- ┌──────────────────┐  resolves   ┌───────────────────┐
- │ ExtraAccountMeta  │────────────▶│  Policy PDA (ro)  │
- │       List        │             │  Tracker PDA (rw) │
- └────────┬─────────┘             └───────────────────┘
-          │
-          ▼
- ┌──────────────────┐  enforces   ┌───────────────────┐
- │  Execute handler  │────────────▶│  tx cap           │
- │                   │             │  daily/monthly    │
- │  ~3,500 CU        │             │  velocity         │
- │  (zero alloc)     │             │  time window      │
- └──────────────────┘             │  delegations      │
-                                   └───────────────────┘
+Token-2022 transfer
+      │
+      ▼
+┌──────────────────┐  resolves   ┌───────────────────┐
+│ ExtraAccountMeta  │───────────▶│  Policy PDA (ro)  │
+│       List        │            │  Tracker PDA (rw) │
+└────────┬─────────┘            └───────────────────┘
+         │
+         ▼
+┌──────────────────┐  enforces   ┌───────────────────┐
+│  Execute handler  │───────────▶│  per-tx cap       │
+│                   │            │  daily / monthly  │
+│  ~3,500 CU        │            │  velocity limit   │
+│  (zero alloc)     │            │  time window      │
+└──────────────────┘            │  delegation caps  │
+                                 └───────────────────┘
 ```
 
-**PDAs are derived from the token account owner** (read from source account data), not the transfer authority. This is what makes delegation work — a delegate can transfer on behalf of the owner, and the hook still finds the owner's policy.
+PDAs are derived from the **token account owner** (read from source account data via `AccountData` seed resolution), not the transfer authority. This is what makes delegation work — a delegate transfers on behalf of the owner, and the hook still resolves the owner's policy.
 
 ## Instructions
 
-| Disc | Name | Description |
-|------|------|-------------|
-| `8B` | `Execute` | Transfer hook entry — enforces all spending rules |
-| `8B` | `InitializeExtraAccountMetas` | One-time setup — registers PDAs with the runtime |
+| Discriminator | Name | Description |
+|---------------|------|-------------|
+| 8-byte SPL | `Execute` | Transfer hook — enforces all spending rules |
+| 8-byte SPL | `InitializeExtraAccountMetas` | One-time setup — registers PDAs with the runtime |
 | `0x00` | `CreatePolicy` | Create a policy + tracker for a (mint, owner) pair |
 | `0x01` | `UpdatePolicy` | Modify policy rules (owner only) |
 | `0x02` | `AddDelegation` | Grant sub-limited spend authority to another wallet |
 
-## State Layout
+## State
 
-**Policy PDA** — `["policy", mint, owner]` — 240 bytes
-```
- 0:   discriminator (8B)    40:  mint (32B)
- 8:   owner (32B)           72:  tx_cap, daily_cap, monthly_cap (24B)
- 96:  velocity_max/window   100: time_start/end_h
- 102: mode                  104: whitelist_root (32B)
- 136: delegations_len       138: 2× DelegationSlot (96B)
-```
+### Policy PDA — `["policy", mint, owner]` — 240 bytes
 
-**Tracker PDA** — `["tracker", mint, owner]` — 64 bytes
-```
- 0:   discriminator (8B)    8:  daily_spent (8B)
- 16:  monthly_spent (8B)    24: daily_reset_ts (8B)
- 32:  monthly_reset_ts (8B) 40: velocity_count (2B)
- 42:  velocity_window_start  50: tx_count_total (8B)
-```
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 8 | Discriminator (`veilpol\0`) |
+| 8 | 32 | Owner pubkey |
+| 40 | 32 | Mint pubkey |
+| 72 | 8 | `tx_cap` — max per single transfer (0 = unlimited) |
+| 80 | 8 | `daily_cap` — max cumulative per 24h (0 = unlimited) |
+| 88 | 8 | `monthly_cap` — max cumulative per 30d (0 = unlimited) |
+| 96 | 2 | `velocity_max` — max transfers per window (0 = unlimited) |
+| 98 | 2 | `velocity_window` — window in seconds |
+| 100 | 1 | `time_start_h` — earliest UTC hour (0 = any) |
+| 101 | 1 | `time_end_h` — latest UTC hour (0 = any) |
+| 102 | 1 | `mode` — 0=whitelist, 1=blacklist, 2=open |
+| 104 | 32 | `whitelist_root` — Poseidon Merkle root |
+| 136 | 1 | `delegations_len` — active delegation count (max 2) |
+| 138 | 96 | 2 × DelegationSlot (48B each: pubkey + daily_cap + tx_cap) |
 
-## Building
+### Tracker PDA — `["tracker", mint, owner]` — 64 bytes
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 8 | Discriminator (`veiltrk\0`) |
+| 8 | 8 | `daily_spent` |
+| 16 | 8 | `monthly_spent` |
+| 24 | 8 | `daily_reset_ts` |
+| 32 | 8 | `monthly_reset_ts` |
+| 40 | 2 | `velocity_count` |
+| 42 | 8 | `velocity_window_start` |
+| 50 | 8 | `tx_count_total` |
+
+## Build & Test
 
 ```bash
 # Build the SBF binary
 cargo build-sbf
 
-# Run integration tests (27 tests)
+# Run integration tests (27 tests, all passing)
 cargo test --test integration
 ```
 
-Requires:
-- Rust + Solana CLI toolchain (`cargo build-sbf`)
-- The program compiles to `target/deploy/veil_hook.so`
+Requires Rust + Solana CLI toolchain (`cargo build-sbf`). Outputs `target/deploy/veil_hook.so`.
 
-## Deploying
+## Deploy
 
 ```bash
-# Generate a keypair (or use an existing one)
-solana-keygen new -o veil-hook-keypair.json
+# 1. Generate a program keypair
+solana-keygen new -o program-keypair.json
 
-# Update the program ID in src/lib.rs to match
-# solana_address::declare_id!("YOUR_PROGRAM_ID");
+# 2. Get the program ID
+solana-keygen pubkey program-keypair.json
+# → Update declare_id!() in src/lib.rs, then rebuild
 
-# Deploy to devnet
+# 3. Deploy
 solana program deploy target/deploy/veil_hook.so \
-  --program-id veil-hook-keypair.json \
+  --program-id program-keypair.json \
   --url devnet
 
-# Create a Token-2022 mint with transfer hook
+# 4. Create a Token-2022 mint with this hook
 spl-token create-token \
   --program-id TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb \
-  --transfer-hook YOUR_PROGRAM_ID
+  --transfer-hook <PROGRAM_ID>
 
-# Initialize extra account metas for the mint
-# (call InitializeExtraAccountMetas instruction)
+# 5. Initialize extra account metas (one-time per mint)
+# Send an InitializeExtraAccountMetas instruction with accounts:
+#   [extra_metas_pda (writable), mint, authority (signer), system_program]
 
-# Create a policy for the token owner
-# (call CreatePolicy with desired caps)
+# 6. Create a spending policy
+# Send a CreatePolicy instruction (disc 0x00) with accounts:
+#   [owner (signer), mint, policy_pda (writable), tracker_pda (writable), system_program]
+# Data: tx_cap(u64) + daily_cap(u64) + monthly_cap(u64) + velocity_max(u16)
+#       + velocity_window(u16) + time_start_h(u8) + time_end_h(u8) + mode(u8)
 ```
 
 ## Design Decisions
 
-- **Pinocchio over Anchor** — Anchor's deserialization overhead is ~5-10x more CU. Pinocchio gives us direct account data access for minimal compute cost.
-- **Zero-copy state** — All reads/writes go directly to account data slices. No alloc, no serde, no intermediate structs.
-- **Owner-keyed PDAs** — Policy and tracker PDAs use the token account owner (read from source account data via `AccountData` seed resolution), not the transfer authority. This is what makes delegation composable.
-- **Shared tracker** — Owner and delegates share a single tracker. Delegate sub-caps act as additional restrictions on top of global caps (`min(delegate_cap, global_cap)`).
-- **Mode validation** — Only `0` (whitelist), `1` (blacklist), `2` (open) are accepted. Invalid modes are rejected at creation.
-- **Whitelist security default** — Whitelist mode with a non-zero Merkle root rejects all transfers until ZK proof verification is implemented. This is the safe default.
+- **Pinocchio over Anchor** — Direct account data access, ~5-10x less CU than Anchor's deserialization overhead
+- **Zero-copy state** — All reads/writes go directly to account data slices. No alloc, no serde, no intermediate structs
+- **Owner-keyed PDAs** — PDAs use the token account owner (via `AccountData` seed resolution at index 0, offset 32), not the transfer authority. This makes delegation composable without separate PDA trees
+- **Shared tracker** — Owner and delegates share one tracker. Delegate sub-caps are enforced as `min(delegate_cap, global_cap)` — delegates can never exceed global limits
+- **Whitelist security default** — Whitelist mode with a non-zero Merkle root rejects all transfers until ZK verification is implemented. Fail-closed, not fail-open
 
 ## Test Coverage
 
-27 integration tests via [mollusk-svm](https://github.com/anza-xyz/agave/tree/master/mollusk-svm):
+27 integration tests via [mollusk-svm](https://crates.io/crates/mollusk-svm):
 
 - **CreatePolicy** — success, already-initialized, missing signer, invalid mode
 - **UpdatePolicy** — success, wrong owner rejection
 - **AddDelegation** — success with cap verification
-- **Execute** — basic transfer, all cap types, velocity limits, time windows, daily/monthly resets, cumulative tracking, boundary conditions, zero-caps-as-unlimited
+- **Execute** — basic transfer, all cap types (tx/daily/monthly), velocity limits + window reset, time-of-day windows, daily/monthly counter resets, cumulative tracking, exact boundary conditions, zero-caps-as-unlimited
 - **Delegation** — successful delegate transfer, delegate tx cap enforcement, unauthorized wallet rejection
 - **Whitelist** — rejection with non-zero root, passthrough with zero root
-- **InitExtraAccountMetas** — TLV encoding verification, already-initialized guard
+- **InitExtraAccountMetas** — full TLV + seed encoding verification, already-initialized guard
 
 ## Roadmap
 
@@ -150,9 +169,9 @@ spl-token create-token \
 - [ ] Blacklist mode with on-chain recipient list
 - [ ] Per-delegate spend tracking (separate counters)
 - [ ] `RemoveDelegation` instruction
-- [ ] Client SDK (TypeScript)
+- [ ] TypeScript client SDK
 - [ ] Devnet deployment + example scripts
 
 ## License
 
-MIT
+[MIT](LICENSE)
