@@ -11,6 +11,7 @@ crate-type = ["lib", "cdylib"]
 pinocchio = { version = "0.11", features = ["cpi", "alloc"] }
 pinocchio-system = "0.6"
 pinocchio-log = "0.5"
+pinocchio-transfer-hook-interface = { path = "/tmp/pinocchio-fork/programs/transfer-hook-interface" }
 solana-address = { version = "2", features = ["decode", "curve25519"] }
 
 [dev-dependencies]

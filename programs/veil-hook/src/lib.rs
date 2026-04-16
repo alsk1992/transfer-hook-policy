@@ -47,6 +47,9 @@ extern crate alloc;
 
 use pinocchio::{AccountView, Address, ProgramResult};
 use pinocchio::error::ProgramError;
+use pinocchio_transfer_hook_interface::{
+    EXECUTE_DISCRIMINATOR, INITIALIZE_EXTRA_ACCOUNT_META_LIST_DISCRIMINATOR,
+};
 
 // Program ID — matches target/deploy/veil_hook-keypair.json
 solana_address::declare_id!("J39uNr5qGDwFXzZ9w2YtPeVenQRQztLc68QXmFL4Diz1");
@@ -59,14 +62,6 @@ pub mod execute;
 pub mod init_extra;
 pub mod create_policy;
 pub mod whitelist;
-
-// ── Discriminators ───────────────────────────────────────────────────────────
-
-/// 8-byte hash of `spl-transfer-hook-interface:execute`.
-pub const EXECUTE_DISC: [u8; 8] = [105, 37, 101, 197, 75, 251, 102, 26];
-
-/// 8-byte hash of `spl-transfer-hook-interface:initialize-extra-account-metas`.
-const INIT_EXTRA_METAS_DISC: [u8; 8] = [43, 34, 13, 49, 167, 88, 235, 235];
 
 /// Our custom instruction discriminators (1-byte).
 const CREATE_POLICY: u8 = 0x00;
@@ -93,10 +88,10 @@ fn process_instruction(
             .map_err(|_| ProgramError::InvalidInstructionData)?;
 
         match disc8 {
-            EXECUTE_DISC => {
+            EXECUTE_DISCRIMINATOR => {
                 return execute::execute(accounts, &instruction_data[8..]);
             }
-            INIT_EXTRA_METAS_DISC => {
+            INITIALIZE_EXTRA_ACCOUNT_META_LIST_DISCRIMINATOR => {
                 return init_extra::init_extra_account_metas(accounts, &instruction_data[8..]);
             }
             _ => {} // Fall through to 1-byte check.

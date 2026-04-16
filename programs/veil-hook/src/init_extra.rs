@@ -22,44 +22,21 @@
 
 use pinocchio::{AccountView, Address, ProgramResult};
 use pinocchio::error::ProgramError;
-use pinocchio::cpi::{Seed, Signer};
+use pinocchio::cpi::{Seed as CpiSeed, Signer};
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio::sysvars::rent::Rent;
 use pinocchio::sysvars::Sysvar;
 use pinocchio_log::log;
+use pinocchio_transfer_hook_interface::{
+    EXECUTE_DISCRIMINATOR,
+    state::{ExtraAccountMeta, ExtraAccountMetaList, Seed},
+};
 
 use crate::error::VeilError;
 use crate::state::*;
 
-// ── TLV Layout ───────────────────────────────────────────────────────────────
-//
-// SPL ExtraAccountMetaList binary format:
-//
-// ```text
-//   [0..8]    ArrayDiscriminator  (8 bytes — EXECUTE_DISC)
-//   [8..12]   Length              (u32 LE  — byte size of the value)
-//   [12..16]  count               (u32 LE  — number of entries)
-//   [16..]    entries             (35 bytes each)
-// ```
-//
-// Each ExtraAccountMeta entry (35 bytes):
-//
-// ```text
-//   [0]       discriminator   0 = literal pubkey, 1 = PDA from executing program
-//   [1..33]   address_config  32 bytes — raw pubkey or packed seed definitions
-//   [33]      is_signer       0 | 1
-//   [34]      is_writable     0 | 1
-// ```
-//
-// Seed encoding inside address_config (for discriminator = 1):
-//   type 0 = stop sentinel
-//   type 1 = literal:          [1, len, ...bytes]
-//   type 2 = instruction_data: [2, offset, len]
-//   type 3 = account_key:      [3, account_index]
-//   type 4 = account_data:     [4, account_index, data_offset, data_len]
-
-/// Header (8 disc + 4 len + 4 count) + 3 entries × 35 bytes = 121.
-pub const EXTRA_METAS_DATA_SIZE: usize = 121;
+/// Total bytes for the ExtraAccountMetaList PDA (3 entries).
+pub const EXTRA_METAS_DATA_SIZE: usize = ExtraAccountMetaList::size_of(3);
 
 pub fn init_extra_account_metas(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
     if accounts.len() < 4 {
@@ -90,9 +67,9 @@ pub fn init_extra_account_metas(accounts: &mut [AccountView], _data: &[u8]) -> P
 
     let bump_ref = [bump];
     let signer_seeds = [
-        Seed::from(EXTRA_METAS_SEED),
-        Seed::from(mint_addr.as_ref()),
-        Seed::from(&bump_ref),
+        CpiSeed::from(EXTRA_METAS_SEED),
+        CpiSeed::from(mint_addr.as_ref()),
+        CpiSeed::from(&bump_ref),
     ];
     let signer = Signer::from(&signer_seeds);
 
@@ -108,52 +85,44 @@ pub fn init_extra_account_metas(accounts: &mut [AccountView], _data: &[u8]) -> P
     // ── Write ExtraAccountMetaList ───────────────────────────────────────
     let mut buf = accounts[0].try_borrow_mut()?;
 
-    // TLV header
-    buf[0..8].copy_from_slice(&crate::EXECUTE_DISC);                // 8-byte discriminator
-    let value_len: u32 = 4 + 3 * 35;                               // count(4) + entries(105)
-    buf[8..12].copy_from_slice(&value_len.to_le_bytes());           // length
-    buf[12..16].copy_from_slice(&3u32.to_le_bytes());               // count = 3
+    let metas = [
+        // Entry 0: Policy PDA (read-only)
+        // seeds = ["policy", mint(idx 1), source.owner(idx 0, offset 32, len 32)]
+        ExtraAccountMeta::new_with_seeds(
+            &[
+                literal_seed(POLICY_SEED),
+                Seed::AccountKey { index: 1 },
+                Seed::AccountData { account_index: 0, data_index: 32, length: 32 },
+            ],
+            false,
+            false,
+        )?,
+        // Entry 1: Tracker PDA (writable)
+        // seeds = ["tracker", mint(idx 1), source.owner(idx 0, offset 32, len 32)]
+        ExtraAccountMeta::new_with_seeds(
+            &[
+                literal_seed(TRACKER_SEED),
+                Seed::AccountKey { index: 1 },
+                Seed::AccountData { account_index: 0, data_index: 32, length: 32 },
+            ],
+            false,
+            true,
+        )?,
+        // Entry 2: Approval PDA (read-only)
+        // seeds = ["approval", mint(idx 1), source.owner(idx 0, offset 32, len 32), dest(idx 2)]
+        ExtraAccountMeta::new_with_seeds(
+            &[
+                literal_seed(APPROVAL_SEED),
+                Seed::AccountKey { index: 1 },
+                Seed::AccountData { account_index: 0, data_index: 32, length: 32 },
+                Seed::AccountKey { index: 2 },
+            ],
+            false,
+            false,
+        )?,
+    ];
 
-    // Entry 0: Policy PDA (read-only)
-    // seeds = [b"policy", mint_key(idx 1), source_token_account.owner(idx 0, offset 32, len 32)]
-    write_extra_meta(
-        &mut buf[16..16 + 35],
-        false,
-        false,
-        &[
-            SeedDef::Literal(POLICY_SEED),
-            SeedDef::AccountKey(1),
-            SeedDef::AccountData(0, 32, 32),
-        ],
-    );
-
-    // Entry 1: Tracker PDA (writable)
-    // seeds = [b"tracker", mint_key(idx 1), source_token_account.owner(idx 0, offset 32, len 32)]
-    write_extra_meta(
-        &mut buf[51..51 + 35],
-        false,
-        true,
-        &[
-            SeedDef::Literal(TRACKER_SEED),
-            SeedDef::AccountKey(1),
-            SeedDef::AccountData(0, 32, 32),
-        ],
-    );
-
-    // Entry 2: Approval PDA (read-only)
-    // seeds = [b"approval", mint_key(idx 1), source_token_account.owner(idx 0, offset 32, len 32),
-    //          destination_key(idx 2)]
-    write_extra_meta(
-        &mut buf[86..86 + 35],
-        false,
-        false,
-        &[
-            SeedDef::Literal(APPROVAL_SEED),
-            SeedDef::AccountKey(1),
-            SeedDef::AccountData(0, 32, 32),
-            SeedDef::AccountKey(2),
-        ],
-    );
+    ExtraAccountMetaList::init(&mut buf, &EXECUTE_DISCRIMINATOR, &metas)?;
 
     log!("veil: extra account metas initialized");
     Ok(())
@@ -161,52 +130,9 @@ pub fn init_extra_account_metas(accounts: &mut [AccountView], _data: &[u8]) -> P
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-enum SeedDef<'a> {
-    Literal(&'a [u8]),
-    AccountKey(u8),
-    AccountData(u8, u8, u8),
-}
-
-/// Pack one PDA-based ExtraAccountMeta into a 35-byte buffer.
-///
-/// Layout: `[disc=1][address_config × 32][is_signer][is_writable]`
-fn write_extra_meta(buf: &mut [u8], is_signer: bool, is_writable: bool, seeds: &[SeedDef]) {
-    buf[0] = 1; // discriminator: PDA from executing program
-
-    // Pack seeds into address_config (bytes 1..33)
-    let config = &mut buf[1..33];
-    let mut off = 0;
-    for seed in seeds {
-        match seed {
-            SeedDef::Literal(bytes) => {
-                // type 1 = literal: [1, len, ...bytes]
-                if off + 2 + bytes.len() > 32 { break; }
-                config[off] = 1;
-                config[off + 1] = bytes.len() as u8;
-                config[off + 2..off + 2 + bytes.len()].copy_from_slice(bytes);
-                off += 2 + bytes.len();
-            }
-            SeedDef::AccountKey(idx) => {
-                // type 3 = account_key: [3, index]
-                if off + 2 > 32 { break; }
-                config[off] = 3;
-                config[off + 1] = *idx;
-                off += 2;
-            }
-            SeedDef::AccountData(account_idx, data_offset, data_len) => {
-                // type 4 = account_data: [4, account_index, data_offset, data_len]
-                if off + 4 > 32 { break; }
-                config[off] = 4;
-                config[off + 1] = *account_idx;
-                config[off + 2] = *data_offset;
-                config[off + 3] = *data_len;
-                off += 4;
-            }
-        }
-    }
-    // Zero-fill remaining (type 0 = stop sentinel)
-    config[off..].fill(0);
-
-    buf[33] = is_signer as u8;
-    buf[34] = is_writable as u8;
+/// Create a [`Seed::Literal`] from a byte slice.
+fn literal_seed(s: &[u8]) -> Seed {
+    let mut bytes = [0u8; 32];
+    bytes[..s.len()].copy_from_slice(s);
+    Seed::Literal { bytes, length: s.len() as u8 }
 }
